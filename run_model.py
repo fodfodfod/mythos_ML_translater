@@ -1,35 +1,49 @@
 import sys
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+import torch
+from transformers import AutoTokenizer, T5ForConditionalGeneration
 
-MODEL_PATH = "../hugging face/model"   # folder where your trained model was saved
+# ===== CONFIG =====
+MODEL_PATH = "../hugging_face/model"  # folder where your trained model is saved
 
-# Load model + tokenizer
+# ===== DEVICE =====
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"[DEBUG] Using device: {device}")
+
+# ===== LOAD MODEL + TOKENIZER =====
 print("[DEBUG] Loading model...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_PATH)
+model = T5ForConditionalGeneration.from_pretrained(MODEL_PATH)
+model = model.to(device)
+model.eval()
 print("[DEBUG] Model loaded.")
 
-
+# ===== TRANSLATION FUNCTION =====
 def translate(text: str) -> str:
     """Runs the translator model on input text"""
     inputs = tokenizer(
         text,
         return_tensors="pt",
         max_length=256,
-        truncation=True
+        truncation=True,
+        padding="max_length"
     )
 
-    output_ids = model.generate(
-        **inputs,
-        max_length=256,
-        num_beams=4
-    )
+    # Move input tensors to the same device as model
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_length=256,
+            num_beams=4,
+            early_stopping=True
+        )
 
     return tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
-
-# If run with a command-line argument → translate text
+# ===== MAIN =====
 if len(sys.argv) > 1:
+    # Translate from command-line argument
     input_text = " ".join(sys.argv[1:])
     result = translate(input_text)
     print(result)

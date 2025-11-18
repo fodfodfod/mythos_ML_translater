@@ -8,6 +8,10 @@ from transformers import (
     Trainer,
     TrainingArguments
 )
+import warnings
+
+# Suppress HF warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 def main():
     # ===== CONFIG =====
@@ -15,12 +19,12 @@ def main():
     DATA_FILE = "data.json"
     OUTPUT_DIR = "../hugging_face/model"
 
+    # ===== LOAD DATASET =====
     print("[DEBUG] Loading dataset...")
     dataset = load_dataset("json", data_files=DATA_FILE)["train"]
-    print("[DEBUG] Dataset loaded.")
-    print(f"[DEBUG] Number of training samples: {len(dataset)}")
+    print(f"[DEBUG] Dataset loaded: {len(dataset)} samples")
 
-    # ===== SELECT DEVICE =====
+    # ===== DEVICE =====
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("[DEBUG] Using device:", device)
     torch.backends.cudnn.benchmark = True
@@ -30,24 +34,26 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     model = AutoModelForSeq2SeqLM.from_pretrained(
         MODEL_NAME,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+        torch_dtype=torch.bfloat16,
     )
+    model.config.use_cache = False
     model = model.to(device)
 
     # ===== TOKENIZATION FUNCTION =====
     def preprocess(example):
+        # T5 uses "input → label"
         model_input = tokenizer(
             example["input"],
-            max_length=512,
-            truncation=True,
-            padding="max_length"
+            max_length=256,
+            truncation=True
         )
+
         labels = tokenizer(
             example["output"],
-            max_length=512,
-            truncation=True,
-            padding="max_length"
+            max_length=256,
+            truncation=True
         )["input_ids"]
+
         model_input["labels"] = labels
         return model_input
 
@@ -58,20 +64,19 @@ def main():
     # ===== DATA COLLATOR =====
     data_collator = DataCollatorForSeq2Seq(tokenizer, model=model)
 
-    # ===== TRAINING SETTINGS =====
+    # ===== TRAINING CONFIG =====
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
-        per_device_train_batch_size=64,    # max batch size for 8GB+ VRAM
-        gradient_accumulation_steps=1,     # no accumulation, full batch on GPU
-        learning_rate=2e-4,
-        num_train_epochs=5,                # few epochs since dataset is tiny
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=4,
+        learning_rate=3e-4,
+        num_train_epochs=10,
         bf16=True,
-        fp16=False,  
-        save_strategy="no",                # skip saving intermediate epochs to save time
+        fp16=False,
+        save_strategy="epoch",
         logging_steps=10,
-        report_to="none",
-        dataloader_pin_memory=True,
     )
+
     # ===== TRAINER =====
     trainer = Trainer(
         model=model,
@@ -81,11 +86,12 @@ def main():
         data_collator=data_collator,
     )
 
+    # ===== START TRAINING =====
     print("[DEBUG] Starting training...")
     trainer.train()
     print("[DEBUG] Training complete.")
 
-    # ===== SAVE =====
+    # ===== SAVE MODEL =====
     print("[DEBUG] Saving final model...")
     trainer.save_model(OUTPUT_DIR)
     tokenizer.save_pretrained(OUTPUT_DIR)
